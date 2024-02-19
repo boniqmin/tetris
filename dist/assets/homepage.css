@@ -1,0 +1,52 @@
+:root {
+    --purple: #db3eed;
+}
+
+.mainpage {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+}
+
+
+
+.buttons {
+    display: flex;
+    flex-direction: row;
+    justify-content: center;
+    gap: 20px;
+    margin: 30px;
+}
+
+.buttons>button {
+    padding: 10px;
+    font-size: large;
+    background-color: var(--purple);
+
+}
+
+/* 
+button {
+    background-color: #db3eed;
+} */
+
+
+@media (min-aspect-ratio: 1/1) {
+    .buttons {
+        visibility: hidden;
+    }
+}
+
+
+body {
+    /* display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center; */
+    /* background-color: beige; */
+    background-color: rgb(5, 27, 46);
+    color: var(--purple);
+    font-family: Sixtyfour;
+    /* height: 98vh; */
+}

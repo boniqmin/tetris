@@ -1,0 +1,27 @@
+[application]
+name = "tetris"
+default_platform = "web"
+out_dir = "dist"
+asset_dir = "public"
+
+[web.app]
+title = "Tetris"
+
+[web.watcher]
+
+# When watcher is triggered, regenerate the `index.html`
+reload_html = true
+watch_path = ["src", "public"]
+
+# Which files or dirs will be monitored
+# watch_path = ["src", "public"]
+
+[web.resource]
+style = ["./assets/homepage.css"] # , "./assets/favicon.ico"]
+
+
+[web.resource.dev]
+style = ["./assets/homepage.css"]
+
+# [[web.proxy]]
+# backend = "http://localhost:8001/api/"
