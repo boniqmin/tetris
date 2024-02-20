@@ -50,3 +50,19 @@ body {
     font-family: Sixtyfour;
     /* height: 98vh; */
 }
+
+@keyframes popout {
+    from {
+        color: var(--purple);
+    }
+
+    to {
+        color: red;
+    }
+}
+
+.gameover {
+    animation-name: popout;
+    animation-duration: 4s;
+    color: red;
+}

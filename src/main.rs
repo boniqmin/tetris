@@ -9,7 +9,7 @@ use gloo_utils::document;
 use log::LevelFilter;
 use rand::{
     distributions::{Distribution, Standard},
-    Rng,
+    random, Rng,
 };
 
 //
@@ -32,7 +32,7 @@ fn App(cx: Scope) -> Element {
     render! {
         link { rel: "stylesheet", href: "https://fonts.googleapis.com/css?family=Sixtyfour" }
         div { class: "mainpage",
-            h1 {"Tetris"}
+            a {href: "/", style: "text-decoration: none; color: var(--purple);", h1 {"Tetris"}}
             BoardView {}
         }
     }
@@ -49,6 +49,7 @@ struct Board {
     width: usize,
     height: usize,
     active_piece: Piece,
+    stored_piece: PieceType,
     done: bool,
     score: u32,
 }
@@ -68,6 +69,7 @@ impl Board {
             width,
             height,
             active_piece: random_piece_at(width / 2, height - 4),
+            stored_piece: random(),
             done: false,
             score: 0,
         }
@@ -86,6 +88,43 @@ impl Board {
     // fn add_piece(&mut self, piece: &Piece) {
     //     for (x,y) in piece.squares
     // }
+    fn check_valid_piece_position(&self, piece: &Piece) -> bool {
+        for (x, y) in piece.squares() {
+            if !self.open_square((x, y)) {
+                return false;
+            }
+        }
+        true
+    }
+
+    fn swap_stored(&mut self) {
+        let mut new_active_piece = self.active_piece.clone();
+        new_active_piece.piece_type = self.stored_piece.clone();
+        if self.check_valid_piece_position(&new_active_piece) {
+            // self.stored_piece = self.active_piece.piece_type;
+            // self.active_piece = new_active_piece;
+            let old_active_piece = std::mem::replace(&mut self.active_piece, new_active_piece);
+            self.stored_piece = old_active_piece.piece_type;
+        }
+    }
+
+    fn instant_drop_piece(&self) -> Piece {
+        let mut phantom_piece = self.active_piece.clone();
+        for y in (-1..self.active_piece.position.1).rev() {
+            // check from -1 since turned pieces can have negative y-pos while being inside the board
+            phantom_piece.position.1 = y as i32;
+            if !self.check_valid_piece_position(&phantom_piece) {
+                phantom_piece.position.1 += 1;
+                return phantom_piece;
+            }
+        }
+        self.active_piece.clone() // fallback, but shouldn't be necessary
+    }
+
+    fn do_instant_drop(&mut self) {
+        self.active_piece = self.instant_drop_piece();
+    }
+
     fn tick(&mut self) {
         let piece_moved = self.move_piece(Direction::Down);
         if !piece_moved {
@@ -109,6 +148,8 @@ impl Board {
     }
 
     fn open_square(&self, (x, y): (i32, i32)) -> bool {
+        // checks if square is in range and free. Safe alternative to square_filled
+
         // self.in_range((x, y)) && !self.get_square(x as usize, y as usize) // TODO: choose (x,y) vs x,y in function signatures
         if !self.in_range((x, y)) {
             return false;
@@ -149,7 +190,13 @@ impl Board {
                 self.active_piece.piece_type.to_hue(),
             ); // unchecked i32 to usize, should be okay though
         }
-        let new_piece = random_piece_at(self.width / 2, self.height - 2);
+        // let new_piece = random_piece_at(self.width / 2, self.height - 2);
+        let old_stored_piece = std::mem::replace(&mut self.stored_piece, random());
+        let new_piece = Piece {
+            position: ((self.width / 2) as i32, (self.height - 2) as i32),
+            piece_type: old_stored_piece,
+            orientation: Orientation::Deg0,
+        };
         for (x, y) in new_piece.squares() {
             if self.in_range((x, y)) && self.square_filled(x as usize, y as usize) {
                 // new piece placed onto occupied square
@@ -258,17 +305,6 @@ impl Piece {
     }
 
     fn squares_after_move(&self, direction: Direction) -> Vec<(i32, i32)> {
-        // let new_pos = match direction {
-        //     Direction::Up => (self.position.0, self.position.1 + 1),
-        //     Direction::Down => (self.position.0, self.position.1 - 1),
-        //     Direction::Left => (self.position.0 - 1, self.position.1),
-        //     Direction::Right => (self.position.0 + 1, self.position.1),
-        // };
-        // self.piece_type
-        //     .to_squares()
-        //     .iter()
-        //     .map(|&(dx, dy)| (new_pos.0 + dx, new_pos.1 + dy))
-        //     .collect()
         let (dx, dy) = match direction {
             Direction::Up => (0, 1),
             Direction::Down => (0, -1),
@@ -382,6 +418,16 @@ impl PieceType {
         }
     }
 
+    fn average_pos(&self) -> (f32, f32) {
+        let mut sum_x = 0.;
+        let mut sum_y = 0.;
+        for (x, y) in self.to_squares() {
+            sum_x += x as f32;
+            sum_y += y as f32;
+        }
+        (sum_x / 4., sum_y / 4.)
+    }
+
     fn to_hue(&self) -> f32 {
         match self {
             PieceType::I => 303.,
@@ -466,6 +512,12 @@ fn BoardView(cx: Scope) -> Element {
                         "ArrowUp" => {
                             board.with_mut(|x| x.rotate_piece(true));
                         }
+                        "s" => {
+                            board.with_mut(|x| x.do_instant_drop());
+                        }
+                        "e" => {
+                            board.with_mut(|x| x.swap_stored());
+                        }
                         _ => {}
                     }
                 });
@@ -519,7 +571,7 @@ fn BoardView(cx: Scope) -> Element {
 
 
         if board.read().done {
-            rsx!{ p {"Game over"}}
+            rsx!{ div {class:"gameover", "Game over"}}
         }
 
 
@@ -539,6 +591,30 @@ fn BoardView(cx: Scope) -> Element {
         br {}
 
         svg {
+            width: 60,
+            height: 60,
+            view_box: "-30 -30 210 210",
+            for (x,y) in board.read().stored_piece.to_squares().into_iter(){
+
+                Block {
+                    x: ((x as f32 - board.read().stored_piece.average_pos().0 + 1.5) * 40.) as i32 , // x * 40
+                    y: 120 - ((y as f32 - board.read().stored_piece.average_pos().1 + 1.5) * 40.) as i32,  //120 - y * 40
+                    hue: board.read().stored_piece.to_hue(),
+                    opacity: 100.
+                }
+            }
+            rect {
+                x: -20,
+                y: -20,
+                width: 200,
+                height: 200,
+                stroke_width: 10,
+                stroke: "var(--purple)",
+                fill: "transparent"
+            }
+        }
+
+        svg {
             width: 200,
             height: 400,
             view_box: "-10 -10 410 810",
@@ -548,24 +624,41 @@ fn BoardView(cx: Scope) -> Element {
                         rsx!{Block {
                             x: x as i32  *40,
                             y: 760-(y as i32 *40),
-                            hue: hue
+                            hue: hue,
+                            opacity: 100.
                         }}
                     }
                 }
             },
-            // render active piece
+
             if !board.read().done {
                 rsx!{
-                for &(x,y) in board.read().active_piece.squares().iter() {
+                    // render instant drop piece
+                    for &(x,y) in board.read().instant_drop_piece().squares().iter() {
 
-                    Block {
-                        x: x * 40,
-                        y: 760 - y * 40,
-                        hue: board.read().active_piece.piece_type.to_hue()
+                        Block {
+                            x: x * 40,
+                            y: 760 - y * 40,
+                            hue: board.read().active_piece.piece_type.to_hue(),
+                            opacity: 30.
+                        }
                     }
-                }
+
+                    // render active piece
+                    for &(x,y) in board.read().active_piece.squares().iter() {
+
+                        Block {
+                            x: x * 40,
+                            y: 760 - y * 40,
+                            hue: board.read().active_piece.piece_type.to_hue(),
+                            opacity: 100.
+                        }
+                    }
+
+
                 }
             }
+
             rect { // border around game
                 x: 0,
                 y: 0,
@@ -579,15 +672,22 @@ fn BoardView(cx: Scope) -> Element {
 
         }
 
+
+        // div {
+        //     border: "5px solid var(--purple)"
+
+        // }
+
+
         div {
             class: "buttons",
-            button { onclick: |_| {to_owned![board]; async move {board.with_mut(|x| x.move_piece(Direction::Left));}},
+            button { onclick: |_| {board.with_mut(|x| x.move_piece(Direction::Left));},
                     "←"},
-            button { onclick: |_| {to_owned![board]; async move {board.with_mut(|x| x.move_piece(Direction::Right));}},
+            button { onclick: |_| {board.with_mut(|x| x.move_piece(Direction::Right));},
                     "→"}
-            button { onclick: |_| {to_owned![board]; async move { board.with_mut(|x| x.tick());}},
+            button { onclick: |_| {board.with_mut(|x| x.do_instant_drop());}, // used to be x.tick()
                     "↓"}
-            button { onclick: |_| {to_owned![board]; async move { board.with_mut(|x| x.rotate_piece(true));}},
+            button { onclick: |_| {board.with_mut(|x| x.rotate_piece(true));},
                 "↻"}
         }
 
@@ -595,17 +695,17 @@ fn BoardView(cx: Scope) -> Element {
 }
 
 #[component]
-fn Block(cx: Scope, x: i32, y: i32, hue: f32) -> Element {
+fn Block(cx: Scope, x: i32, y: i32, hue: f32, opacity: f32) -> Element {
     render! {
         g {
             transform:"
             translate({x} {y})
             scale(0.4)",
-            path { d:"M 0 0 L 10 10 H 90 L 100 0 Z", style:"fill:hsl({hue}, 100%, 80%)"},
-            path { d:"M 0 0 L 10 10 V 90 L 0 100 Z", style:"fill:hsl({hue}, 100%, 40%)"},
-            path { d:"M 100 0 L 90 10 V 90 L 100 100 Z", style:"fill:hsl({hue}, 100%, 40%)"},
-            path { d:"M 0 100 L 10 90 H 90 L 100 100 Z", style:"fill:hsl({hue}, 100%, 20%)"},
-            path { d:"M 10 10 H 90 V 90 H 10 Z", style:"fill:hsl({hue}, 100%, 50%)"}
+            path { d:"M 0 0 L 10 10 H 90 L 100 0 Z", style:"fill:hsl({hue}, 100%, 80%, {opacity}%)"},
+            path { d:"M 0 0 L 10 10 V 90 L 0 100 Z", style:"fill:hsl({hue}, 100%, 40%, {opacity}%)"},
+            path { d:"M 100 0 L 90 10 V 90 L 100 100 Z", style:"fill:hsl({hue}, 100%, 40%, {opacity}%)"},
+            path { d:"M 0 100 L 10 90 H 90 L 100 100 Z", style:"fill:hsl({hue}, 100%, 20%, {opacity}%)"},
+            path { d:"M 10 10 H 90 V 90 H 10 Z", style:"fill:hsl({hue}, 100%, 50%, {opacity}%)"}
         }
     }
 }
