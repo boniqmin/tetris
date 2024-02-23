@@ -32,7 +32,13 @@ button {
 } */
 
 
-@media (min-aspect-ratio: 1/1) {
+/* @media (min-aspect-ratio: 1/1) {
+    .buttons {
+        visibility: hidden;
+    }
+} */
+
+@media (pointer: fine) {
     .buttons {
         visibility: hidden;
     }

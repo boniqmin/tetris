@@ -38,12 +38,6 @@ fn App(cx: Scope) -> Element {
     }
 }
 
-fn Test(cx: Scope) -> Element {
-    render! {
-        p{"test"}
-    }
-}
-
 struct Board {
     board: Vec<Vec<Option<f32>>>, // probably later Option<Color> or something
     width: usize,
@@ -123,12 +117,13 @@ impl Board {
 
     fn do_instant_drop(&mut self) {
         self.active_piece = self.instant_drop_piece();
+        self.tick(); // instantly lock piece
     }
 
     fn tick(&mut self) {
         let piece_moved = self.move_piece(Direction::Down);
         if !piece_moved {
-            self.next_piece();
+            self.lock_and_renew_active_piece();
         }
         self.clear_full_rows();
     }
@@ -177,7 +172,7 @@ impl Board {
         }
     }
 
-    fn next_piece(&mut self) {
+    fn lock_and_renew_active_piece(&mut self) {
         // locks previous piece in place and makes a new one
         if self.done {
             return;
@@ -476,13 +471,6 @@ enum Direction {
     Left,
     Right,
 }
-fn bool_to_color(b: bool) -> &'static str {
-    if b {
-        "red"
-    } else {
-        "white"
-    }
-}
 
 #[allow(non_snake_case)]
 fn BoardView(cx: Scope) -> Element {
@@ -528,6 +516,7 @@ fn BoardView(cx: Scope) -> Element {
     let n_ticks = use_state(cx, || 0);
 
     let _ticker: &Coroutine<()> = use_coroutine(cx, |_rx| {
+        // TODO: consider using Tokio timeout on rx.next() to get ticks & messages
         to_owned![board, n_ticks];
         async move {
             // let interval = gloo_timers::callback::Interval::new(500, move || {
@@ -590,6 +579,7 @@ fn BoardView(cx: Scope) -> Element {
 
         br {}
 
+        // shows stored piece
         svg {
             width: 60,
             height: 60,
@@ -614,6 +604,8 @@ fn BoardView(cx: Scope) -> Element {
             }
         }
 
+
+        // main board
         svg {
             width: 200,
             height: 400,
@@ -673,22 +665,15 @@ fn BoardView(cx: Scope) -> Element {
         }
 
 
-        // div {
-        //     border: "5px solid var(--purple)"
-
-        // }
-
-
+        // buttons for touch controls
         div {
             class: "buttons",
-            button { onclick: |_| {board.with_mut(|x| x.move_piece(Direction::Left));},
-                    "←"},
-            button { onclick: |_| {board.with_mut(|x| x.move_piece(Direction::Right));},
-                    "→"}
-            button { onclick: |_| {board.with_mut(|x| x.do_instant_drop());}, // used to be x.tick()
-                    "↓"}
-            button { onclick: |_| {board.with_mut(|x| x.rotate_piece(true));},
-                "↻"}
+            button { onclick: |_| {board.with_mut(|x| x.move_piece(Direction::Left));}, "←"},
+            button { onclick: |_| {board.with_mut(|x| x.move_piece(Direction::Right));}, "→"}
+            button { onclick: |_| {board.with_mut(|x| x.do_instant_drop());}, "⭳"}// used to be x.tick()
+
+            button { onclick: |_| {board.with_mut(|x| x.rotate_piece(true));}, "↻"}
+            button { onclick: |_| {board.with_mut(|x| x.swap_stored());}, "🗘"}  // ⤮⮂🗘⮁
         }
 
     }
