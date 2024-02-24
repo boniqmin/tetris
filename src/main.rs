@@ -480,9 +480,11 @@ fn BoardView(cx: Scope) -> Element {
 
     let keypress_listener_state = use_state(cx, || None); // just to keep it in scope
     let touch_move_listener_state = use_state(cx, || None);
+    let mouse_move_listener_state = use_state(cx, || None);
 
-    let width = gloo_utils::window().screen().unwrap().width().unwrap();
-    let width_interval = width / board.read().width as i32;
+    // let width = gloo_utils::window().screen().unwrap().width().unwrap();
+    // let width_interval = width / board.read().width as i32 / 3;
+    let width_interval = 20;
 
     let last_touch_x = use_state(cx, || None);
 
@@ -490,6 +492,7 @@ fn BoardView(cx: Scope) -> Element {
         to_owned![
             keypress_listener_state,
             touch_move_listener_state,
+            mouse_move_listener_state,
             board,
             last_touch_x
         ];
@@ -530,29 +533,54 @@ fn BoardView(cx: Scope) -> Element {
 
             // });
 
-            let touch_move_listener = gloo_events::EventListener::new(
+            let touch_move_listener =
+                gloo_events::EventListener::new(&document_event_target, "touchmove", {
+                    to_owned![last_touch_x, board];
+                    move |event| {
+                        let event = event.dyn_ref::<web_sys::TouchEvent>().unwrap();
+                        let Some(touch) = event.touches().get(0) else {
+                            return;
+                        };
+                        if let Some(x) = *last_touch_x.current() {
+                            if touch.screen_x() - x > width_interval {
+                                last_touch_x.set(Some(touch.screen_x()));
+                                board.with_mut(|x| x.move_piece(Direction::Right));
+                            } else if x - touch.screen_x() > width_interval {
+                                last_touch_x.set(Some(touch.screen_x()));
+                                board.with_mut(|x| x.move_piece(Direction::Left));
+                            };
+                        } else {
+                            last_touch_x.set(Some(touch.screen_x()));
+                        };
+                    }
+                });
+
+            touch_move_listener_state.set(Some(touch_move_listener));
+
+            let mouse_move_listener = gloo_events::EventListener::new(
                 &document_event_target,
-                "touchmove",
+                "mousemove",
                 move |event| {
-                    let event = event.dyn_ref::<web_sys::TouchEvent>().unwrap();
-                    let Some(touch) = event.touches().get(0) else {
-                        return;
-                    };
+                    let event = event.dyn_ref::<web_sys::MouseEvent>().unwrap();
+                    // let Some(touch) = event.touches().get(0) else {
+                    //     return;
+                    // };
                     if let Some(x) = *last_touch_x.current() {
-                        if touch.screen_x() - x > width_interval {
-                            last_touch_x.set(Some(x));
+                        if event.screen_x() - x > width_interval {
+                            last_touch_x.set(Some(event.screen_x()));
                             board.with_mut(|x| x.move_piece(Direction::Right));
-                        } else if x - touch.screen_x() > width_interval {
-                            last_touch_x.set(Some(x));
+                            log::info!("{}, {x}", event.screen_x());
+                        } else if x - event.screen_x() > width_interval {
+                            last_touch_x.set(Some(event.screen_x()));
                             board.with_mut(|x| x.move_piece(Direction::Left));
                         };
                     } else {
-                        last_touch_x.set(Some(touch.screen_x()));
+                        last_touch_x.set(Some(event.screen_x()));
                     };
                 },
             );
 
-            touch_move_listener_state.set(Some(touch_move_listener));
+            mouse_move_listener_state.set(Some(mouse_move_listener));
         }
     });
 

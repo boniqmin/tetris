@@ -15,4 +15,4 @@ gloo-timers = { version = "0.3.0", features = ["futures"] }
 gloo-utils = "0.2.0"
 log = "0.4.20"
 rand = "0.8.5"
-web-sys = { version = "0.3.68", features = ["HtmlElement", "EventTarget", "Screen", "TouchEvent", "Touch", "TouchList"] }
+web-sys = { version = "0.3.68", features = ["HtmlElement", "EventTarget", "Screen", "TouchEvent", "Touch", "TouchList", "MouseEvent"] }
