@@ -480,21 +480,29 @@ fn BoardView(cx: Scope) -> Element {
 
     let keypress_listener_state = use_state(cx, || None); // just to keep it in scope
     let touch_move_listener_state = use_state(cx, || None);
-    let mouse_move_listener_state = use_state(cx, || None);
+    // let mouse_move_listener_state = use_state(cx, || None);
+    let touch_start_listener_state = use_state(cx, || None);
+    let touch_end_listener_state = use_state(cx, || None);
 
     // let width = gloo_utils::window().screen().unwrap().width().unwrap();
     // let width_interval = width / board.read().width as i32 / 3;
     let width_interval = 20;
 
     let last_touch_x = use_state(cx, || None);
+    let last_touch_y = use_state(cx, || None);
 
+    // note to self: if you separate the board out into its own component, this one won't refresh so often
+    // so event listeners don't have to be kept between renders (i.e. no need for use_on_create and use_states)
     use_on_create(cx, || {
         to_owned![
             keypress_listener_state,
             touch_move_listener_state,
-            mouse_move_listener_state,
+            // mouse_move_listener_state,
+            touch_start_listener_state,
+            touch_end_listener_state,
             board,
-            last_touch_x
+            last_touch_x,
+            last_touch_y
         ];
         async move {
             let document_event_target: EventTarget = gloo_utils::document().dyn_into().unwrap();
@@ -557,30 +565,61 @@ fn BoardView(cx: Scope) -> Element {
 
             touch_move_listener_state.set(Some(touch_move_listener));
 
-            let mouse_move_listener = gloo_events::EventListener::new(
-                &document_event_target,
-                "mousemove",
-                move |event| {
-                    let event = event.dyn_ref::<web_sys::MouseEvent>().unwrap();
-                    // let Some(touch) = event.touches().get(0) else {
-                    //     return;
-                    // };
-                    if let Some(x) = *last_touch_x.current() {
-                        if event.screen_x() - x > width_interval {
-                            last_touch_x.set(Some(event.screen_x()));
-                            board.with_mut(|x| x.move_piece(Direction::Right));
-                            log::info!("{}, {x}", event.screen_x());
-                        } else if x - event.screen_x() > width_interval {
-                            last_touch_x.set(Some(event.screen_x()));
-                            board.with_mut(|x| x.move_piece(Direction::Left));
+            let touch_start_listener =
+                gloo_events::EventListener::new(&document_event_target, "touchstart", {
+                    to_owned![last_touch_y];
+                    move |event| {
+                        let event = event.dyn_ref::<web_sys::TouchEvent>().unwrap();
+                        let Some(touch) = event.touches().get(0) else {
+                            return;
                         };
-                    } else {
-                        last_touch_x.set(Some(event.screen_x()));
-                    };
-                },
-            );
+                        last_touch_y.set(Some(touch.screen_y()));
+                    }
+                });
 
-            mouse_move_listener_state.set(Some(mouse_move_listener));
+            touch_start_listener_state.set(Some(touch_start_listener));
+
+            let touch_end_listener =
+                gloo_events::EventListener::new(&document_event_target, "touchend", move |event| {
+                    last_touch_x.set(None);
+                    let event = event.dyn_ref::<web_sys::TouchEvent>().unwrap();
+                    let Some(touch) = event.touches().get(0) else {
+                        return;
+                    };
+                    if let Some(y) = *last_touch_y.current() {
+                        if touch.screen_y() - y > 100 {
+                            board.with_mut(|x| x.do_instant_drop());
+                            last_touch_y.set(None);
+                        }
+                    }
+                });
+
+            touch_end_listener_state.set(Some(touch_end_listener));
+
+            // let mouse_move_listener = gloo_events::EventListener::new(
+            //     &document_event_target,
+            //     "mousemove",
+            //     move |event| {
+            //         let event = event.dyn_ref::<web_sys::MouseEvent>().unwrap();
+            //         // let Some(touch) = event.touches().get(0) else {
+            //         //     return;
+            //         // };
+            //         if let Some(x) = *last_touch_x.current() {
+            //             if event.screen_x() - x > width_interval {
+            //                 last_touch_x.set(Some(event.screen_x()));
+            //                 board.with_mut(|x| x.move_piece(Direction::Right));
+            //                 log::info!("{}, {x}", event.screen_x());
+            //             } else if x - event.screen_x() > width_interval {
+            //                 last_touch_x.set(Some(event.screen_x()));
+            //                 board.with_mut(|x| x.move_piece(Direction::Left));
+            //             };
+            //         } else {
+            //             last_touch_x.set(Some(event.screen_x()));
+            //         };
+            //     },
+            // );
+
+            // mouse_move_listener_state.set(Some(mouse_move_listener));
         }
     });
 
