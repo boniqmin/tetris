@@ -33,6 +33,11 @@ body {
 
 }
 
+.clearbutton {
+    all: unset;
+    background: none;
+}
+
 /* 
 button {
     background-color: #db3eed;

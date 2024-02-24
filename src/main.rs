@@ -117,7 +117,7 @@ impl Board {
 
     fn do_instant_drop(&mut self) {
         self.active_piece = self.instant_drop_piece();
-        self.tick(); // instantly lock piece
+        // self.tick(); // instantly lock piece, maybe not ideal
     }
 
     fn tick(&mut self) {
@@ -493,6 +493,7 @@ fn BoardView(cx: Scope) -> Element {
 
     // note to self: if you separate the board out into its own component, this one won't refresh so often
     // so event listeners don't have to be kept between renders (i.e. no need for use_on_create and use_states)
+    // issue: stuff needs to exist before attaching event listeners
     use_on_create(cx, || {
         to_owned![
             keypress_listener_state,
@@ -567,12 +568,14 @@ fn BoardView(cx: Scope) -> Element {
 
             let touch_start_listener =
                 gloo_events::EventListener::new(&document_event_target, "touchstart", {
-                    to_owned![last_touch_y];
+                    to_owned![last_touch_x, last_touch_y];
                     move |event| {
+                        log::info!("touchstart");
                         let event = event.dyn_ref::<web_sys::TouchEvent>().unwrap();
                         let Some(touch) = event.touches().get(0) else {
                             return;
                         };
+                        last_touch_x.set(Some(touch.screen_x()));
                         last_touch_y.set(Some(touch.screen_y()));
                     }
                 });
@@ -581,17 +584,27 @@ fn BoardView(cx: Scope) -> Element {
 
             let touch_end_listener =
                 gloo_events::EventListener::new(&document_event_target, "touchend", move |event| {
-                    last_touch_x.set(None);
                     let event = event.dyn_ref::<web_sys::TouchEvent>().unwrap();
-                    let Some(touch) = event.touches().get(0) else {
+                    let Some(touch) = event.changed_touches().get(0) else {
+                        last_touch_x.set(None);
+                        last_touch_y.set(None);
                         return;
                     };
+                    log::info!("touchend {:?}", *last_touch_y.current());
                     if let Some(y) = *last_touch_y.current() {
+                        log::info!("{y} {}", touch.screen_y());
                         if touch.screen_y() - y > 100 {
                             board.with_mut(|x| x.do_instant_drop());
                             last_touch_y.set(None);
+                        } else if (touch.screen_y() - y).abs()
+                            + (touch.screen_x() - last_touch_x.current().unwrap()).abs() // TODO: unwrap is bad
+                            < 1
+                        {
+                            board.with_mut(|x| x.rotate_piece(true));
                         }
                     }
+                    last_touch_x.set(None);
+                    last_touch_y.set(None);
                 });
 
             touch_end_listener_state.set(Some(touch_end_listener));
@@ -620,6 +633,32 @@ fn BoardView(cx: Scope) -> Element {
             // );
 
             // mouse_move_listener_state.set(Some(mouse_move_listener));
+
+            // let touch_start_listener =
+            //     gloo_events::EventListener::new(&document_event_target, "mousedown", {
+            //         to_owned![last_touch_y];
+            //         move |event| {
+            //             let event = event.dyn_ref::<web_sys::MouseEvent>().unwrap();
+            //             last_touch_y.set(Some(event.screen_y()));
+            //         }
+            //     });
+
+            // touch_start_listener_state.set(Some(touch_start_listener));
+
+            // let touch_end_listener =
+            //     gloo_events::EventListener::new(&document_event_target, "mouseup", move |event| {
+            //         last_touch_x.set(None);
+            //         let event = event.dyn_ref::<web_sys::MouseEvent>().unwrap();
+            //         if let Some(y) = *last_touch_y.current() {
+            //             log::info!("{y} {}", event.screen_y());
+            //             if event.screen_y() - y > 100 {
+            //                 board.with_mut(|x| x.do_instant_drop());
+            //                 last_touch_y.set(None);
+            //             }
+            //         }
+            //     });
+
+            // touch_end_listener_state.set(Some(touch_end_listener));
         }
     });
 
@@ -690,27 +729,31 @@ fn BoardView(cx: Scope) -> Element {
         br {}
 
         // shows stored piece
-        svg {
-            width: 60,
-            height: 60,
-            view_box: "-30 -30 210 210",
-            for (x,y) in board.read().stored_piece.to_squares().into_iter(){
+        button {
+            class: "clearbutton",
+            onclick: move |_| {board.with_mut(|x| x.swap_stored());},
+            svg {
+                width: 60,
+                height: 60,
+                view_box: "-30 -30 210 210",
+                for (x,y) in board.read().stored_piece.to_squares().into_iter(){
 
-                Block {
-                    x: ((x as f32 - board.read().stored_piece.average_pos().0 + 1.5) * 40.) as i32 , // x * 40
-                    y: 120 - ((y as f32 - board.read().stored_piece.average_pos().1 + 1.5) * 40.) as i32,  //120 - y * 40
-                    hue: board.read().stored_piece.to_hue(),
-                    opacity: 100.
+                    Block {
+                        x: ((x as f32 - board.read().stored_piece.average_pos().0 + 1.5) * 40.) as i32 , // x * 40
+                        y: 120 - ((y as f32 - board.read().stored_piece.average_pos().1 + 1.5) * 40.) as i32,  //120 - y * 40
+                        hue: board.read().stored_piece.to_hue(),
+                        opacity: 100.
+                    }
                 }
-            }
-            rect {
-                x: -20,
-                y: -20,
-                width: 200,
-                height: 200,
-                stroke_width: 10,
-                stroke: "var(--purple)",
-                fill: "transparent"
+                rect {
+                    x: -20,
+                    y: -20,
+                    width: 200,
+                    height: 200,
+                    stroke_width: 10,
+                    stroke: "var(--purple)",
+                    fill: "transparent"
+                }
             }
         }
 
