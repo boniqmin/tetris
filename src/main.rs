@@ -478,38 +478,81 @@ fn BoardView(cx: Scope) -> Element {
 
     // let pressed = use_state(cx, || false);
 
-    let global_event_listener = use_state(cx, || None); // just to keep it in scope
+    let keypress_listener_state = use_state(cx, || None); // just to keep it in scope
+    let touch_move_listener_state = use_state(cx, || None);
+
+    let width = gloo_utils::window().screen().unwrap().width().unwrap();
+    let width_interval = width / board.read().width as i32;
+
+    let last_touch_x = use_state(cx, || None);
 
     use_on_create(cx, || {
-        to_owned![global_event_listener, board];
+        to_owned![
+            keypress_listener_state,
+            touch_move_listener_state,
+            board,
+            last_touch_x
+        ];
         async move {
             let document_event_target: EventTarget = gloo_utils::document().dyn_into().unwrap();
-            let glob_key_listener =
-                gloo_events::EventListener::new(&document_event_target, "keydown", move |event| {
-                    let event = event.dyn_ref::<web_sys::KeyboardEvent>().unwrap();
-                    match event.key().as_str() {
-                        "ArrowLeft" => {
-                            board.with_mut(|x| x.move_piece(Direction::Left));
+            let keypress_listener =
+                gloo_events::EventListener::new(&document_event_target, "keydown", {
+                    to_owned![board];
+                    move |event| {
+                        let event = event.dyn_ref::<web_sys::KeyboardEvent>().unwrap();
+                        match event.key().as_str() {
+                            "ArrowLeft" => {
+                                board.with_mut(|x| x.move_piece(Direction::Left));
+                            }
+                            "ArrowRight" => {
+                                board.with_mut(|x| x.move_piece(Direction::Right));
+                            }
+                            "ArrowDown" => {
+                                board.with_mut(|x| x.tick());
+                            } // tick to immediately move to next piece when active piece hits something
+                            "ArrowUp" => {
+                                board.with_mut(|x| x.rotate_piece(true));
+                            }
+                            "s" => {
+                                board.with_mut(|x| x.do_instant_drop());
+                            }
+                            "e" => {
+                                board.with_mut(|x| x.swap_stored());
+                            }
+                            _ => {}
                         }
-                        "ArrowRight" => {
-                            board.with_mut(|x| x.move_piece(Direction::Right));
-                        }
-                        "ArrowDown" => {
-                            board.with_mut(|x| x.tick());
-                        } // tick to immediately move to next piece when active piece hits something
-                        "ArrowUp" => {
-                            board.with_mut(|x| x.rotate_piece(true));
-                        }
-                        "s" => {
-                            board.with_mut(|x| x.do_instant_drop());
-                        }
-                        "e" => {
-                            board.with_mut(|x| x.swap_stored());
-                        }
-                        _ => {}
                     }
                 });
-            global_event_listener.set(Some(glob_key_listener));
+            keypress_listener_state.set(Some(keypress_listener));
+
+            // let touch_start_listener = gloo_events::EventListener::new(&document_event_target, "touchstart", move |event| {
+            //     let event = event.dyn_ref::<websys::TouchEvent>().unwrap();
+
+            // });
+
+            let touch_move_listener = gloo_events::EventListener::new(
+                &document_event_target,
+                "touchmove",
+                move |event| {
+                    let event = event.dyn_ref::<web_sys::TouchEvent>().unwrap();
+                    let Some(touch) = event.touches().get(0) else {
+                        return;
+                    };
+                    if let Some(x) = *last_touch_x.current() {
+                        if touch.screen_x() - x > width_interval {
+                            last_touch_x.set(Some(x));
+                            board.with_mut(|x| x.move_piece(Direction::Right));
+                        } else if x - touch.screen_x() > width_interval {
+                            last_touch_x.set(Some(x));
+                            board.with_mut(|x| x.move_piece(Direction::Left));
+                        };
+                    } else {
+                        last_touch_x.set(Some(touch.screen_x()));
+                    };
+                },
+            );
+
+            touch_move_listener_state.set(Some(touch_move_listener));
         }
     });
 

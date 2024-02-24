@@ -2,6 +2,13 @@
     --purple: #db3eed;
 }
 
+html,
+body {
+    margin: 0;
+    height: 100%;
+    overflow: hidden
+}
+
 .mainpage {
     display: flex;
     flex-direction: column;
