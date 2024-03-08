@@ -193,7 +193,11 @@ let m,p,ls,d,t,op,i,e,z,metaflags;
                         else{
                             return ns_cache[ns_cache_tmp2&4294967167];
                         }
+<<<<<<< HEAD
                     }const evt = [];
+=======
+                    }let u32buf,u32bufp;let u8buf,u8bufp;let s = "";let lsp,sp,sl; let c = new TextDecoder();const evt = [];
+>>>>>>> main
                     let evt_tmp1, evt_tmp2;
                     function get_evt() {
                         evt_tmp2 = u8buf[u8bufp++];
@@ -205,8 +209,13 @@ let m,p,ls,d,t,op,i,e,z,metaflags;
                         else{
                             return evt[evt_tmp2&4294967167];
                         }
+<<<<<<< HEAD
                     }let u32buf,u32bufp;let s = "";let lsp,sp,sl; let c = new TextDecoder();let u8buf,u8bufp;
             let event_name,bubbles,len,field,value,id,ns,ptr;
+=======
+                    }
+            let value,event_name,ptr,len,id,bubbles,field,ns;
+>>>>>>> main
             export function create(r){
                 d=r;
             }
@@ -222,7 +231,14 @@ let m,p,ls,d,t,op,i,e,z,metaflags;
                 if ((metaflags>>>3)&1){
                 u32buf=new Uint32Array(m.buffer,m.getUint32(d+3*4,true))
             }
+<<<<<<< HEAD
             u32bufp=0;if (metaflags&1){
+=======
+            u32bufp=0;if ((metaflags>>>5)&1){
+                u8buf=new Uint8Array(m.buffer,m.getUint32(d+5*4,true))
+            }
+            u8bufp=0;if (metaflags&1){
+>>>>>>> main
                 lsp = m.getUint32(d+1*4,true);
             }
             if ((metaflags>>>2)&1) {
@@ -248,10 +264,14 @@ let m,p,ls,d,t,op,i,e,z,metaflags;
                     s = c.decode(new DataView(m.buffer, lsp, sl));
                 }
             }
+<<<<<<< HEAD
             sp=0;if ((metaflags>>>5)&1){
                 u8buf=new Uint8Array(m.buffer,m.getUint32(d+5*4,true))
             }
             u8bufp=0;
+=======
+            sp=0;
+>>>>>>> main
                 for(;;){
                     op=m.getUint32(p,true);
                     p+=4;
