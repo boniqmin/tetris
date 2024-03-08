@@ -542,7 +542,7 @@ fn BoardView(cx: Scope) -> Element {
             touch_end_listener_state,
             board,
             active_touch,
-            in_speedup,
+            in_speedup
         ];
         async move {
             let document_event_target: EventTarget = gloo_utils::document().dyn_into().unwrap();
@@ -675,11 +675,9 @@ fn BoardView(cx: Scope) -> Element {
         }
     });
 
-    let n_ticks = use_state(cx, || 0);
-
     let _ticker: &Coroutine<()> = use_coroutine(cx, |_rx| {
         // TODO: consider using Tokio timeout on rx.next() to get ticks & messages
-        to_owned![board, n_ticks];
+        to_owned![board];
         async move {
             // let interval = gloo_timers::callback::Interval::new(500, move || {
             //     n_ticks += 1;
@@ -688,7 +686,7 @@ fn BoardView(cx: Scope) -> Element {
             // interval.forget();
             loop {
                 gloo_timers::future::TimeoutFuture::new(1_000).await;
-                n_ticks += 1;
+                log::info!("tick");
                 board.with_mut(|b| b.tick());
                 if board.read().done {
                     break;
@@ -698,26 +696,7 @@ fn BoardView(cx: Scope) -> Element {
     });
 
     render! {
-        // p{"{pressed}"}
-        // p{"{n_ticks}"}
-
         p{ "{board.read().score}"}
-
-        // div {
-        //     id: "main_input",
-        //     // display: "none",
-        //     onmounted: move |_| {
-        //         let _ = document().get_element_by_id("main_input")
-        //             .unwrap()
-        //             .dyn_into::<HtmlElement>()
-        //             .unwrap()
-        //             .focus();},
-        //     onkeydown: move |key_event| {
-        //         if key_event.code() == Code::KeyP {
-        //             pressed.set(true);
-        //         }
-        //     }
-        // }
 
 
 
@@ -726,18 +705,6 @@ fn BoardView(cx: Scope) -> Element {
         }
 
 
-
-        // input {
-        //     onkeydown: move |key_event| {
-        //         match key_event.code() {
-        //             Code::ArrowLeft => {board.with_mut(|x| x.move_piece(Direction::Left));},
-        //             Code::ArrowRight => {board.with_mut(|x| x.move_piece(Direction::Right));}
-        //             Code::ArrowDown => {board.with_mut(|x| x.tick());} // tick to immediately move to next piece when active piece hits something
-        //             Code::ArrowUp => {board.with_mut(|x| x.rotate_piece(true));}
-        //             _ => {}
-        //         }
-        //     }
-        // }
 
         br {}
 
