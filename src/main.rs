@@ -30,16 +30,6 @@ fn main() {
     dioxus_logger::init(LevelFilter::Info).expect("Failed to launch logger");
 }
 
-fn App(cx: Scope) -> Element {
-    render! {
-        link { rel: "stylesheet", href: "https://fonts.googleapis.com/css?family=Sixtyfour" }
-        div { class: "mainpage",
-            a {href: "/", style: "text-decoration: none; color: var(--purple);", h1 {"Tetris"}}
-            BoardView {}
-        }
-    }
-}
-
 struct Board {
     board: Vec<Vec<Option<f32>>>, // probably later Option<Color> or something
     width: usize,
@@ -494,25 +484,212 @@ impl TouchData {
     }
 }
 
-#[allow(non_snake_case)]
-fn BoardView(cx: Scope) -> Element {
-    let board = use_ref(cx, || Board::new(10, 20));
+fn App(cx: Scope) -> Element {
+    // let board = use_ref(cx, || Board::new(10, 20));
+    use_shared_state_provider(cx, || Board::new(10, 20));
+    use_shared_state_provider::<Option<TouchData>>(cx, || None);
+    let board = use_shared_state::<Board>(cx).unwrap();
+    let active_touch = use_shared_state::<Option<TouchData>>(cx).unwrap();
+
     // let width = gloo_utils::window().screen().unwrap().width().unwrap();
     // let width_interval = width / board.read().width as i32 / 3;
     let width_interval = 20;
 
-    // let pressed = use_state(cx, || false);
-
-    let keypress_listener_state = use_state(cx, || None); // just to keep it in scope
-    let touch_move_listener_state = use_state(cx, || None);
-    // let mouse_move_listener_state = use_state(cx, || None);
-    let touch_start_listener_state = use_state(cx, || None);
-    let touch_end_listener_state = use_state(cx, || None);
-
-    let active_touch: &UseRef<Option<TouchData>> = use_ref(cx, || None);
+    // let active_touch: &UseRef<Option<TouchData>> = use_ref(cx, || None);
     // let touch_holding = use_state(cx, || false);
     let in_speedup = use_state(cx, || false);
 
+    let document_event_target: EventTarget = gloo_utils::document().dyn_into().unwrap();
+    let keypress_listener = gloo_events::EventListener::new(&document_event_target, "keydown", {
+        to_owned![board];
+        move |event| {
+            let event = event.dyn_ref::<web_sys::KeyboardEvent>().unwrap();
+            match event.key().as_str() {
+                "ArrowLeft" => {
+                    board.with_mut(|x| x.move_piece(Direction::Left));
+                }
+                "ArrowRight" => {
+                    board.with_mut(|x| x.move_piece(Direction::Right));
+                }
+                "ArrowDown" => {
+                    board.with_mut(|x| x.tick());
+                } // tick to immediately move to next piece when active piece hits something
+                "ArrowUp" => {
+                    board.with_mut(|x| x.rotate_piece(true));
+                }
+                "s" => {
+                    board.with_mut(|x| x.do_instant_drop());
+                }
+                "e" => {
+                    board.with_mut(|x| x.swap_stored());
+                }
+                _ => {}
+            }
+        }
+    });
+    let keypress_listener = use_state(cx, move || keypress_listener);
+
+    let touch_move_listener =
+        gloo_events::EventListener::new(&document_event_target, "touchmove", {
+            to_owned![active_touch, board, in_speedup];
+            move |event| {
+                let event = event.dyn_ref::<web_sys::TouchEvent>().unwrap();
+                let Some(moving_touch) = event.touches().get(0) else {
+                    return;
+                };
+                if let Some(touchdata) = active_touch.write().as_mut() {
+                    let dx = moving_touch.screen_x() - touchdata.last_log_location.0;
+                    let dy = moving_touch.screen_y() - touchdata.last_log_location.1;
+                    if dy.abs() > dx.abs() {
+                        return;
+                    } // reject movement that is not horizontal to prevent conflict with swipe down
+
+                    if dx > width_interval {
+                        // moved left
+                        board.with_mut(|x| x.move_piece(Direction::Right));
+                    } else if -dx > width_interval {
+                        // moved right
+                        board.with_mut(|x| x.move_piece(Direction::Left));
+                    } else {
+                        // touchmove too small, so rejected
+                        return;
+                    };
+                    // if not rejected, do this stuff (regardless whether move was left or right)
+                    touchdata.last_log_location.0 = moving_touch.screen_x();
+                    touchdata.has_moved_sideways = true;
+                    in_speedup.set(false);
+                }
+            }
+        });
+    let touch_move_listener = use_state(cx, move || touch_move_listener);
+
+    let touch_start_listener =
+        gloo_events::EventListener::new(&document_event_target, "touchstart", {
+            to_owned![active_touch, board];
+            move |event| {
+                let event = event.dyn_ref::<web_sys::TouchEvent>().unwrap();
+                let Some(touch) = event.touches().get(0) else {
+                    return;
+                };
+                // last_touch_x.set(Some(touch.screen_x()));
+                // last_touch_y.set(Some(touch.screen_y()));
+                let new_touchdata = TouchData::new((touch.screen_x(), touch.screen_y()));
+                let new_touch_id = new_touchdata.id;
+                *active_touch.write() = Some(new_touchdata);
+            }
+        });
+
+    let touch_start_listener = use_state(cx, move || touch_start_listener);
+
+    let touch_end_listener = gloo_events::EventListener::new(&document_event_target, "touchend", {
+        to_owned![board, in_speedup, active_touch];
+        move |event| {
+            let Some(active_touch_data) = active_touch.with_mut(|x| x.take()) else {
+                if *in_speedup.current() {
+                    // if in speedup mode, touch release should only stop the speedup
+                    in_speedup.set(false);
+                    return;
+                }
+                return; // if this happens, we've lost track of the touch start so just ignore the event
+            }; // .take() the active touch so it's immediately cleared, and store its old value in touchdata for processing the touchend
+            if *in_speedup.current() {
+                // if in speedup mode, touch release should only stop the speedup
+                in_speedup.set(false);
+                return;
+            }
+
+            let event = event.dyn_ref::<web_sys::TouchEvent>().unwrap();
+            let Some(touch_end) = event.changed_touches().get(0) else {
+                return;
+            };
+
+            // logic for distinguishing swipe down / tap for rotate / reject
+            // TODO: maybe tap for rotate should just be the board being a button?
+            let (touch_start_x, touch_start_y) = (
+                active_touch_data.start_location.0,
+                active_touch_data.start_location.1,
+            );
+            let (touch_end_x, touch_end_y) = (touch_end.screen_x(), touch_end.screen_y());
+
+            if touch_end_y - touch_start_y > 100 {
+                // swipe down => instant drop
+                board.with_mut(|x| x.do_instant_drop());
+            }
+            // else if (touch_end_y - touch_start_y).abs() // tap => rotate piece
+            //     + (touch_end_x - touch_start_x).abs()
+            //     < 1
+            //     && instant::now() - active_touch_data.start_time < 400.
+            // // 400 for safety margin
+            // {
+            //     board.with_mut(|x| x.rotate_piece(true));
+            // }
+        }
+    });
+
+    let touch_end_listener = use_state(cx, move || touch_end_listener);
+
+    render! {
+        link { rel: "stylesheet", href: "https://fonts.googleapis.com/css?family=Sixtyfour" }
+        div { class: "mainpage",
+            a {href: "/", style: "text-decoration: none; color: var(--purple);", h1 {"Tetris"}} // header
+
+
+
+            p{ "{board.read().score}"}
+
+
+
+            if board.read().done {
+                rsx!{ div {class:"gameover", "Game over"}}
+            }
+
+
+
+            br {}
+
+            // shows stored piece
+            button {
+                class: "clearbutton",
+                onclick: move |_| {board.with_mut(|x| x.swap_stored());},
+                svg {
+                    width: 60,
+                    height: 60,
+                    view_box: "-30 -30 210 210",
+                    for (x,y) in board.read().stored_piece.to_squares().into_iter(){
+
+                        Block {
+                            x: ((x as f32 - board.read().stored_piece.average_pos().0 + 1.5) * 40.) as i32 , // x * 40
+                            y: 120 - ((y as f32 - board.read().stored_piece.average_pos().1 + 1.5) * 40.) as i32,  //120 - y * 40
+                            hue: board.read().stored_piece.to_hue(),
+                            opacity: 100.
+                        }
+                    }
+                    rect {
+                        x: -20,
+                        y: -20,
+                        width: 200,
+                        height: 200,
+                        stroke_width: 10,
+                        stroke: "var(--purple)",
+                        fill: "transparent"
+                    }
+                }
+            }
+
+            button {
+                class: "clearbutton",
+                onclick: move |_| {board.with_mut(|x| x.rotate_piece(true));},
+                BoardView{}
+            }
+        }
+    }
+}
+
+#[allow(non_snake_case)]
+#[component]
+fn BoardView(cx: Scope) -> Element {
+    let board = use_shared_state::<Board>(cx).unwrap();
+    let active_touch = use_shared_state::<Option<TouchData>>(cx).unwrap();
     // let last_touch_x = use_state(cx, || None);
     // let last_touch_y = use_state(cx, || None);
 
@@ -531,150 +708,6 @@ fn BoardView(cx: Scope) -> Element {
         }
     });
 
-    // note to self: if you separate the board out into its own component, this one won't refresh so often
-    // so event listeners don't have to be kept between renders (i.e. no need for use_on_create and use_states)
-    // issue: stuff needs to exist before attaching event listeners
-    use_on_create(cx, || {
-        to_owned![
-            keypress_listener_state,
-            touch_move_listener_state,
-            touch_start_listener_state,
-            touch_end_listener_state,
-            board,
-            active_touch,
-            in_speedup
-        ];
-        async move {
-            let document_event_target: EventTarget = gloo_utils::document().dyn_into().unwrap();
-            let keypress_listener =
-                gloo_events::EventListener::new(&document_event_target, "keydown", {
-                    to_owned![board];
-                    move |event| {
-                        let event = event.dyn_ref::<web_sys::KeyboardEvent>().unwrap();
-                        match event.key().as_str() {
-                            "ArrowLeft" => {
-                                board.with_mut(|x| x.move_piece(Direction::Left));
-                            }
-                            "ArrowRight" => {
-                                board.with_mut(|x| x.move_piece(Direction::Right));
-                            }
-                            "ArrowDown" => {
-                                board.with_mut(|x| x.tick());
-                            } // tick to immediately move to next piece when active piece hits something
-                            "ArrowUp" => {
-                                board.with_mut(|x| x.rotate_piece(true));
-                            }
-                            "s" => {
-                                board.with_mut(|x| x.do_instant_drop());
-                            }
-                            "e" => {
-                                board.with_mut(|x| x.swap_stored());
-                            }
-                            _ => {}
-                        }
-                    }
-                });
-            keypress_listener_state.set(Some(keypress_listener));
-
-            let touch_move_listener =
-                gloo_events::EventListener::new(&document_event_target, "touchmove", {
-                    to_owned![active_touch, board, in_speedup];
-                    move |event| {
-                        let event = event.dyn_ref::<web_sys::TouchEvent>().unwrap();
-                        let Some(moving_touch) = event.touches().get(0) else {
-                            return;
-                        };
-                        if let Some(touchdata) = active_touch.write().as_mut() {
-                            let dx = moving_touch.screen_x() - touchdata.last_log_location.0;
-                            let dy = moving_touch.screen_y() - touchdata.last_log_location.1;
-                            if dy.abs() > dx.abs() {
-                                return;
-                            } // reject movement that is not horizontal to prevent conflict with swipe down
-
-                            if dx > width_interval {
-                                // moved left
-                                board.with_mut(|x| x.move_piece(Direction::Right));
-                            } else if -dx > width_interval {
-                                // moved right
-                                board.with_mut(|x| x.move_piece(Direction::Left));
-                            } else {
-                                // touchmove too small, so rejected
-                                return;
-                            };
-                            // if not rejected, do this stuff (regardless whether move was left or right)
-                            touchdata.last_log_location.0 = moving_touch.screen_x();
-                            touchdata.has_moved_sideways = true;
-                            in_speedup.set(false);
-                        }
-                    }
-                });
-
-            touch_move_listener_state.set(Some(touch_move_listener));
-
-            let touch_start_listener =
-                gloo_events::EventListener::new(&document_event_target, "touchstart", {
-                    to_owned![active_touch, board];
-                    move |event| {
-                        let event = event.dyn_ref::<web_sys::TouchEvent>().unwrap();
-                        let Some(touch) = event.touches().get(0) else {
-                            return;
-                        };
-                        // last_touch_x.set(Some(touch.screen_x()));
-                        // last_touch_y.set(Some(touch.screen_y()));
-                        let new_touchdata = TouchData::new((touch.screen_x(), touch.screen_y()));
-                        let new_touch_id = new_touchdata.id;
-                        active_touch.set(Some(new_touchdata));
-                    }
-                });
-
-            touch_start_listener_state.set(Some(touch_start_listener));
-
-            let touch_end_listener =
-                gloo_events::EventListener::new(&document_event_target, "touchend", move |event| {
-                    let Some(active_touch_data) = active_touch.with_mut(|x| x.take()) else {
-                        if *in_speedup.current() {
-                            // if in speedup mode, touch release should only stop the speedup
-                            in_speedup.set(false);
-                            return;
-                        }
-                        return; // if this happens, we've lost track of the touch start so just ignore the event
-                    }; // .take() the active touch so it's immediately cleared, and store its old value in touchdata for processing the touchend
-                    if *in_speedup.current() {
-                        // if in speedup mode, touch release should only stop the speedup
-                        in_speedup.set(false);
-                        return;
-                    }
-
-                    let event = event.dyn_ref::<web_sys::TouchEvent>().unwrap();
-                    let Some(touch_end) = event.changed_touches().get(0) else {
-                        return;
-                    };
-
-                    // logic for distinguishing swipe down / tap for rotate / reject
-                    // TODO: maybe tap for rotate should just be the board being a button?
-                    let (touch_start_x, touch_start_y) = (
-                        active_touch_data.start_location.0,
-                        active_touch_data.start_location.1,
-                    );
-                    let (touch_end_x, touch_end_y) = (touch_end.screen_x(), touch_end.screen_y());
-
-                    if touch_end_y - touch_start_y > 100 {
-                        // swipe down => instant drop
-                        board.with_mut(|x| x.do_instant_drop());
-                    } else if (touch_end_y - touch_start_y).abs() // tap => rotate piece
-                        + (touch_end_x - touch_start_x).abs()
-                        < 1
-                        && instant::now() - active_touch_data.start_time < 400.
-                    // 400 for safety margin
-                    {
-                        board.with_mut(|x| x.rotate_piece(true));
-                    }
-                });
-
-            touch_end_listener_state.set(Some(touch_end_listener));
-        }
-    });
-
     let _ticker: &Coroutine<()> = use_coroutine(cx, |_rx| {
         // TODO: consider using Tokio timeout on rx.next() to get ticks & messages
         to_owned![board];
@@ -686,7 +719,6 @@ fn BoardView(cx: Scope) -> Element {
             // interval.forget();
             loop {
                 gloo_timers::future::TimeoutFuture::new(1_000).await;
-                log::info!("tick");
                 board.with_mut(|b| b.tick());
                 if board.read().done {
                     break;
@@ -696,48 +728,6 @@ fn BoardView(cx: Scope) -> Element {
     });
 
     render! {
-        p{ "{board.read().score}"}
-
-
-
-        if board.read().done {
-            rsx!{ div {class:"gameover", "Game over"}}
-        }
-
-
-
-        br {}
-
-        // shows stored piece
-        button {
-            class: "clearbutton",
-            onclick: move |_| {board.with_mut(|x| x.swap_stored());},
-            svg {
-                width: 60,
-                height: 60,
-                view_box: "-30 -30 210 210",
-                for (x,y) in board.read().stored_piece.to_squares().into_iter(){
-
-                    Block {
-                        x: ((x as f32 - board.read().stored_piece.average_pos().0 + 1.5) * 40.) as i32 , // x * 40
-                        y: 120 - ((y as f32 - board.read().stored_piece.average_pos().1 + 1.5) * 40.) as i32,  //120 - y * 40
-                        hue: board.read().stored_piece.to_hue(),
-                        opacity: 100.
-                    }
-                }
-                rect {
-                    x: -20,
-                    y: -20,
-                    width: 200,
-                    height: 200,
-                    stroke_width: 10,
-                    stroke: "var(--purple)",
-                    fill: "transparent"
-                }
-            }
-        }
-
-
         // main board
         svg {
             width: 200,
@@ -795,18 +785,6 @@ fn BoardView(cx: Scope) -> Element {
             }
 
 
-        }
-
-
-        // buttons for touch controls
-        div {
-            class: "buttons",
-            button { onclick: |_| {board.with_mut(|x| x.move_piece(Direction::Left));}, "←"},
-            button { onclick: |_| {board.with_mut(|x| x.move_piece(Direction::Right));}, "→"}
-            button { onclick: |_| {board.with_mut(|x| x.do_instant_drop());}, "⭳"}// used to be x.tick()
-
-            button { onclick: |_| {board.with_mut(|x| x.rotate_piece(true));}, "↻"}
-            button { onclick: |_| {board.with_mut(|x| x.swap_stored());}, "🗘"}  // ⤮⮂🗘⮁
         }
 
     }
