@@ -1,6 +1,7 @@
 use dioxus::html::input_data::keyboard_types::Code;
 use dioxus::prelude::*;
-use std::fmt::Display;
+use futures_util::stream::StreamExt;
+use std::{fmt::Display, time::Duration}; // for rx.next()
 
 // use wasm_bindgen::JsCast;
 use web_sys::{wasm_bindgen::JsCast, EventTarget, HtmlElement};
@@ -11,6 +12,7 @@ use rand::{
     distributions::{Distribution, Standard},
     random, Rng,
 };
+use tokio::time::timeout;
 
 //
 fn main() {
@@ -117,7 +119,7 @@ impl Board {
 
     fn do_instant_drop(&mut self) {
         self.active_piece = self.instant_drop_piece();
-        // self.tick(); // instantly lock piece, maybe not ideal
+        self.tick(); // instantly lock piece, maybe not ideal
     }
 
     fn tick(&mut self) {
@@ -472,9 +474,32 @@ enum Direction {
     Right,
 }
 
+struct TouchData {
+    start_location: (i32, i32),
+    last_log_location: (i32, i32),
+    id: u64,
+    start_time: f64,
+    has_moved_sideways: bool,
+}
+
+impl TouchData {
+    fn new(location: (i32, i32)) -> Self {
+        Self {
+            start_location: location.clone(),
+            last_log_location: location,
+            id: random(),
+            start_time: instant::now(),
+            has_moved_sideways: false,
+        }
+    }
+}
+
 #[allow(non_snake_case)]
 fn BoardView(cx: Scope) -> Element {
     let board = use_ref(cx, || Board::new(10, 20));
+    // let width = gloo_utils::window().screen().unwrap().width().unwrap();
+    // let width_interval = width / board.read().width as i32 / 3;
+    let width_interval = 20;
 
     // let pressed = use_state(cx, || false);
 
@@ -484,12 +509,27 @@ fn BoardView(cx: Scope) -> Element {
     let touch_start_listener_state = use_state(cx, || None);
     let touch_end_listener_state = use_state(cx, || None);
 
-    // let width = gloo_utils::window().screen().unwrap().width().unwrap();
-    // let width_interval = width / board.read().width as i32 / 3;
-    let width_interval = 20;
+    let active_touch: &UseRef<Option<TouchData>> = use_ref(cx, || None);
+    // let touch_holding = use_state(cx, || false);
+    let in_speedup = use_state(cx, || false);
 
-    let last_touch_x = use_state(cx, || None);
-    let last_touch_y = use_state(cx, || None);
+    // let last_touch_x = use_state(cx, || None);
+    // let last_touch_y = use_state(cx, || None);
+
+    let _speedup: &Coroutine<u64> = use_coroutine(cx, |mut rx| {
+        to_owned![board, active_touch];
+        async move {
+            loop {
+                if let Some(touchdata) = active_touch.read().as_ref() {
+                    if instant::now() - touchdata.start_time > 500. && !touchdata.has_moved_sideways
+                    {
+                        board.with_mut(|x| x.tick());
+                    }
+                }
+                gloo_timers::future::TimeoutFuture::new(70).await; // not very efficient...
+            }
+        }
+    });
 
     // note to self: if you separate the board out into its own component, this one won't refresh so often
     // so event listeners don't have to be kept between renders (i.e. no need for use_on_create and use_states)
@@ -498,12 +538,11 @@ fn BoardView(cx: Scope) -> Element {
         to_owned![
             keypress_listener_state,
             touch_move_listener_state,
-            // mouse_move_listener_state,
             touch_start_listener_state,
             touch_end_listener_state,
             board,
-            last_touch_x,
-            last_touch_y
+            active_touch,
+            in_speedup,
         ];
         async move {
             let document_event_target: EventTarget = gloo_utils::document().dyn_into().unwrap();
@@ -537,30 +576,36 @@ fn BoardView(cx: Scope) -> Element {
                 });
             keypress_listener_state.set(Some(keypress_listener));
 
-            // let touch_start_listener = gloo_events::EventListener::new(&document_event_target, "touchstart", move |event| {
-            //     let event = event.dyn_ref::<websys::TouchEvent>().unwrap();
-
-            // });
-
             let touch_move_listener =
                 gloo_events::EventListener::new(&document_event_target, "touchmove", {
-                    to_owned![last_touch_x, board];
+                    to_owned![active_touch, board, in_speedup];
                     move |event| {
                         let event = event.dyn_ref::<web_sys::TouchEvent>().unwrap();
-                        let Some(touch) = event.touches().get(0) else {
+                        let Some(moving_touch) = event.touches().get(0) else {
                             return;
                         };
-                        if let Some(x) = *last_touch_x.current() {
-                            if touch.screen_x() - x > width_interval {
-                                last_touch_x.set(Some(touch.screen_x()));
+                        if let Some(touchdata) = active_touch.write().as_mut() {
+                            let dx = moving_touch.screen_x() - touchdata.last_log_location.0;
+                            let dy = moving_touch.screen_y() - touchdata.last_log_location.1;
+                            if dy.abs() > dx.abs() {
+                                return;
+                            } // reject movement that is not horizontal to prevent conflict with swipe down
+
+                            if dx > width_interval {
+                                // moved left
                                 board.with_mut(|x| x.move_piece(Direction::Right));
-                            } else if x - touch.screen_x() > width_interval {
-                                last_touch_x.set(Some(touch.screen_x()));
+                            } else if -dx > width_interval {
+                                // moved right
                                 board.with_mut(|x| x.move_piece(Direction::Left));
+                            } else {
+                                // touchmove too small, so rejected
+                                return;
                             };
-                        } else {
-                            last_touch_x.set(Some(touch.screen_x()));
-                        };
+                            // if not rejected, do this stuff (regardless whether move was left or right)
+                            touchdata.last_log_location.0 = moving_touch.screen_x();
+                            touchdata.has_moved_sideways = true;
+                            in_speedup.set(false);
+                        }
                     }
                 });
 
@@ -568,15 +613,17 @@ fn BoardView(cx: Scope) -> Element {
 
             let touch_start_listener =
                 gloo_events::EventListener::new(&document_event_target, "touchstart", {
-                    to_owned![last_touch_x, last_touch_y];
+                    to_owned![active_touch, board];
                     move |event| {
-                        log::info!("touchstart");
                         let event = event.dyn_ref::<web_sys::TouchEvent>().unwrap();
                         let Some(touch) = event.touches().get(0) else {
                             return;
                         };
-                        last_touch_x.set(Some(touch.screen_x()));
-                        last_touch_y.set(Some(touch.screen_y()));
+                        // last_touch_x.set(Some(touch.screen_x()));
+                        // last_touch_y.set(Some(touch.screen_y()));
+                        let new_touchdata = TouchData::new((touch.screen_x(), touch.screen_y()));
+                        let new_touch_id = new_touchdata.id;
+                        active_touch.set(Some(new_touchdata));
                     }
                 });
 
@@ -584,81 +631,47 @@ fn BoardView(cx: Scope) -> Element {
 
             let touch_end_listener =
                 gloo_events::EventListener::new(&document_event_target, "touchend", move |event| {
+                    let Some(active_touch_data) = active_touch.with_mut(|x| x.take()) else {
+                        if *in_speedup.current() {
+                            // if in speedup mode, touch release should only stop the speedup
+                            in_speedup.set(false);
+                            return;
+                        }
+                        return; // if this happens, we've lost track of the touch start so just ignore the event
+                    }; // .take() the active touch so it's immediately cleared, and store its old value in touchdata for processing the touchend
+                    if *in_speedup.current() {
+                        // if in speedup mode, touch release should only stop the speedup
+                        in_speedup.set(false);
+                        return;
+                    }
+
                     let event = event.dyn_ref::<web_sys::TouchEvent>().unwrap();
-                    let Some(touch) = event.changed_touches().get(0) else {
-                        last_touch_x.set(None);
-                        last_touch_y.set(None);
+                    let Some(touch_end) = event.changed_touches().get(0) else {
                         return;
                     };
-                    log::info!("touchend {:?}", *last_touch_y.current());
-                    if let Some(y) = *last_touch_y.current() {
-                        log::info!("{y} {}", touch.screen_y());
-                        if touch.screen_y() - y > 100 {
-                            board.with_mut(|x| x.do_instant_drop());
-                            last_touch_y.set(None);
-                        } else if (touch.screen_y() - y).abs()
-                            + (touch.screen_x() - last_touch_x.current().unwrap()).abs() // TODO: unwrap is bad
-                            < 1
-                        {
-                            board.with_mut(|x| x.rotate_piece(true));
-                        }
+
+                    // logic for distinguishing swipe down / tap for rotate / reject
+                    // TODO: maybe tap for rotate should just be the board being a button?
+                    let (touch_start_x, touch_start_y) = (
+                        active_touch_data.start_location.0,
+                        active_touch_data.start_location.1,
+                    );
+                    let (touch_end_x, touch_end_y) = (touch_end.screen_x(), touch_end.screen_y());
+
+                    if touch_end_y - touch_start_y > 100 {
+                        // swipe down => instant drop
+                        board.with_mut(|x| x.do_instant_drop());
+                    } else if (touch_end_y - touch_start_y).abs() // tap => rotate piece
+                        + (touch_end_x - touch_start_x).abs()
+                        < 1
+                        && instant::now() - active_touch_data.start_time < 400.
+                    // 400 for safety margin
+                    {
+                        board.with_mut(|x| x.rotate_piece(true));
                     }
-                    last_touch_x.set(None);
-                    last_touch_y.set(None);
                 });
 
             touch_end_listener_state.set(Some(touch_end_listener));
-
-            // let mouse_move_listener = gloo_events::EventListener::new(
-            //     &document_event_target,
-            //     "mousemove",
-            //     move |event| {
-            //         let event = event.dyn_ref::<web_sys::MouseEvent>().unwrap();
-            //         // let Some(touch) = event.touches().get(0) else {
-            //         //     return;
-            //         // };
-            //         if let Some(x) = *last_touch_x.current() {
-            //             if event.screen_x() - x > width_interval {
-            //                 last_touch_x.set(Some(event.screen_x()));
-            //                 board.with_mut(|x| x.move_piece(Direction::Right));
-            //                 log::info!("{}, {x}", event.screen_x());
-            //             } else if x - event.screen_x() > width_interval {
-            //                 last_touch_x.set(Some(event.screen_x()));
-            //                 board.with_mut(|x| x.move_piece(Direction::Left));
-            //             };
-            //         } else {
-            //             last_touch_x.set(Some(event.screen_x()));
-            //         };
-            //     },
-            // );
-
-            // mouse_move_listener_state.set(Some(mouse_move_listener));
-
-            // let touch_start_listener =
-            //     gloo_events::EventListener::new(&document_event_target, "mousedown", {
-            //         to_owned![last_touch_y];
-            //         move |event| {
-            //             let event = event.dyn_ref::<web_sys::MouseEvent>().unwrap();
-            //             last_touch_y.set(Some(event.screen_y()));
-            //         }
-            //     });
-
-            // touch_start_listener_state.set(Some(touch_start_listener));
-
-            // let touch_end_listener =
-            //     gloo_events::EventListener::new(&document_event_target, "mouseup", move |event| {
-            //         last_touch_x.set(None);
-            //         let event = event.dyn_ref::<web_sys::MouseEvent>().unwrap();
-            //         if let Some(y) = *last_touch_y.current() {
-            //             log::info!("{y} {}", event.screen_y());
-            //             if event.screen_y() - y > 100 {
-            //                 board.with_mut(|x| x.do_instant_drop());
-            //                 last_touch_y.set(None);
-            //             }
-            //         }
-            //     });
-
-            // touch_end_listener_state.set(Some(touch_end_listener));
         }
     });
 
